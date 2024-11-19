@@ -1,8 +1,10 @@
+import sys
 import argparse
 
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
 
 import lightgbm as lgb
 import shap
@@ -34,35 +36,66 @@ T = data[["rank_1", "rank_2", "rank_3", "rank_4", "rank_5", "rank_6"]]
 
 X_train, X_test, T_train, T_test = train_test_split(X, T, test_size=0.3)
 
-x_train = X_train[DATA_LIST]
-t_train = T_train["rank_1"]
+x_train = X_train[DATA_LIST].to_numpy()
+t_train = T_train["rank_1"].to_numpy().astype(int)
 
-x_test = X_test[DATA_LIST]
-t_test = T_test["rank_1"]
+x_test = X_test[DATA_LIST].to_numpy()
+t_test = T_test["rank_1"].to_numpy().astype(int)
 
-dtrain = lgb.Dataset(x_train, t_train)
-dtest = lgb.Dataset(x_test, t_test)
+d_train = lgb.Dataset(x_train, label=t_train)
+d_test = lgb.Dataset(x_test, label=t_test)
 
+# specify your configurations as a dict
 # fmt: off
 params = {
+    "boosting_type": "gbdt",
     "objective": "multiclass",
-    "metric"   : "multi_logloss",
+    "metric": "multi_error",
     "num_class": 6,
-    "random_state": 100
+    "num_leaves": 31,
+    "learning_rate": 0.05,
+    "feature_fraction": 0.9,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 5,
+    "verbose": 0,
 }
 # fmt: on
 
-model_1 = lgb.train(params, dtrain, valid_sets=[dtrain, dtest], callbacks=[lgb.early_stopping(stopping_rounds=10)])
+# create model
+model = lgb.LGBMClassifier(**params)  # scikit API
 
-explainer = shap.TreeExplainer(model_1, data=x_test)
+# train
+print("Starting training...")
+model.fit(x_train, t_train)
 
-shap_values = explainer.shap_values(x_test, approximate=True)
-shap.summary_plot(shap_values=shap_values, features=x_test, plot_type="bar")
+# SHAP
+explainer = shap.TreeExplainer(model)
+shap_values = explainer.shap_values(x_test, t_test)
+explain = shap.Explanation(
+    shap_values,
+    base_values=explainer.expected_value,
+    data=x_test,
+    feature_names=DATA_LIST,
+    output_names=["rank_1", "rank_2", "rank_3", "rank_4", "rank_5", "rank_6"],
+)
 
-print(t_test.iloc[0, :])
-print("")
-# for i in range(6):
-#    print("Class ", i)
-#    shap.force_plot(explainer.expected_value[i], shap_values[i][0, :], x_test.iloc[0, :])
+for i in range(6):
+    shap.plots.bar(explain[:, :, i], show=False)
+    plt.title("Bar " + str(i))
+    plt.show()
 
-shap.force_plot(base_value=explainer.expected_value, shap_values=shap_values, features=x_test)
+for i in range(6):
+    shap.plots.beeswarm(explain[:, :, i], show=False)
+    plt.title("Summary_Plot " + str(i))
+    plt.show()
+
+for i in range(6):
+    shap.plots.decision(
+        base_value=explainer.expected_value[i],
+        shap_values=shap_values[:, :, i],
+        feature_names=DATA_LIST,
+        link="logit",
+        show=False,
+    )
+    plt.title("Decision " + str(i))
+    plt.show()
